@@ -9,10 +9,10 @@ public class Blockchain{
     private static Blockchain INSTANCE;
     protected static int id;
     private ArrayList<Block> list;
-    private int N;
+    private int N; //number of zeros, denoted by N
 
     public Blockchain (){
-        id=0;
+        id=1;
         N=0;
         list = new ArrayList<>();
     }
@@ -23,6 +23,8 @@ public class Blockchain{
         }
         return INSTANCE;
     }
+
+    public int getId(){return this.id;}
 
     public int getN(){return this.N;}
 
@@ -36,10 +38,9 @@ public class Blockchain{
 
     //after the winner miner submits a block, blockchain should validate it
     // (prevHash is the hash of the current last and starts with N zeros)
-    public void addBlock(Block b, long creationTime){
+    public void addBlock(Block b, double creationTime){
         if(validateBlock(b)) {
             list.add(b);
-            b.setId(++Blockchain.id);
             if(creationTime > 60_000 && N > 0){
                 N--;
                 b.setDifficultyMessage("N was decreased by 1");
@@ -51,6 +52,7 @@ public class Blockchain{
                 N++;
                 b.setDifficultyMessage("N was increased to " + N);
             }
+            id++;
         }
     }
 
