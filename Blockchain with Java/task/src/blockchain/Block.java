@@ -13,13 +13,14 @@ public class Block {
     private double generationTime;
     private final int numOfZeros;
     private final List<Message> messages;
-    private String difficultyMessage;
+    private String difficultyMessage="";
 
     public Block(String prevBlockHash, int numOfZeros, int minerId, List<Message> messages){
         this.numOfZeros = numOfZeros;
         this.prevHash = prevBlockHash;
         this.minerId = minerId;
         this.messages = messages;
+
     }
 
     public String getHash() {
@@ -30,14 +31,17 @@ public class Block {
 
     public String getPrevHash() { return prevHash;}
 
+    public synchronized List<Message> getMessages(){return this.messages;}
+
     public long getTimeStamp() { return timeStamp;}
 
-    public double getGenerationTime() { return generationTime;}
+    public double getGenerationTime() {
+        return generationTime;
+    }
 
     public void setId(int id){  this.id = id;}
 
     public void setDifficultyMessage(String s){ difficultyMessage = s;}
-
 
     /**
      * Mines the block by finding a magic number such that the hash of the block
@@ -57,7 +61,7 @@ public class Block {
 
         do {
             temp = StringUtil.applySha256(this.prevHash + this.id + this.timeStamp +
-                                            this.magic +  this.minerId + this.messages);
+                    this.magic +  this.minerId + this.messages);
             magic++;
         } while (!temp.startsWith(target));
 
@@ -67,6 +71,12 @@ public class Block {
     }
 
 
+    public long getMaxMessageId() {
+        return messages.stream()
+                .mapToLong(Message::getId)
+                .max()
+                .orElse(0);
+    }
     
     //printing a block with the given format
     protected void printBlock() {

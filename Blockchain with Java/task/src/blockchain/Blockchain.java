@@ -1,8 +1,11 @@
 package blockchain;
 
+import java.security.PublicKey;
 import java.security.Signature;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -11,20 +14,21 @@ public class Blockchain {
     private static Blockchain INSTANCE;
     protected static int id;
     private final ArrayList<Block> list;
-    private final List<Message> pendingMessages;
+    private List<Message> pendingMessages;
+    private Map<String, Client> clients;
     private int N;
     private volatile boolean acceptingMessages;
 
-    // Private constructor for Singleton pattern
     private Blockchain() {
-        id = 1;
+        id = 0;
         N = 0;
         list = new ArrayList<>();
         pendingMessages = new ArrayList<>();
+        clients = new HashMap<>();
         acceptingMessages = true;
     }
 
-    // Returns the singleton instance
+    // Singleton pattern: ensures only one instance of Blockchain
     public static Blockchain getInstance() {
         if (INSTANCE == null) {
             INSTANCE = new Blockchain();
@@ -32,72 +36,70 @@ public class Blockchain {
         return INSTANCE;
     }
 
-    // Getter for mining difficulty
     public int getN() {
         return this.N;
     }
 
-    // Getter for block ID
     public static int getId() {
         return id;
     }
 
-    // Returns the list of pending messages (synchronized for thread safety)
-    public synchronized List<Message> getPendingMessages() {
-        return this.pendingMessages;
-    }
-
-    // Adds a message to the pending list (thread-safe)
-    public synchronized void addPendingMessage(Message m) {
-        pendingMessages.add(m);
-    }
-
-    // Increments the global block ID
     public void incrementId() {
         id++;
     }
 
-    // Clears the list of pending messages
+    // Synchronized method to safely retrieve the list of pending messages
+    public synchronized List<Message> getPendingMessages() {
+        return this.pendingMessages;
+    }
+
+    // Synchronized method to safely add a message to the pendingMessages list
+    public synchronized void addPendingMessage(Message m) {
+        // Get the current maximum message ID in the blockchain
+        long maxId = list.isEmpty() ? 0 : getLastBlock().getMaxMessageId();
+
+        // Only add the message if it's valid and has a greater ID than the last one
+        if (verifyMessage(m) && m.getId() > maxId) {
+            pendingMessages.add(m);
+        } else {
+            System.out.println("Rejected invalid message: " + m);
+        }
+    }
+
+    public Map<String, Client> getClients() {
+        return clients;
+    }
+
     public void clearPendingMessages() {
         pendingMessages.clear();
     }
 
-    // Enables message intake during a mining round
+    // Utility methods to control whether the blockchain is accepting messages
     public void startAcceptingMessages() {
         acceptingMessages = true;
     }
 
-    // Disables message intake when mining ends
     public void stopAcceptingMessages() {
         acceptingMessages = false;
     }
 
-    // Returns whether message intake is allowed
     public boolean isAcceptingMessages() {
         return acceptingMessages;
     }
 
-    // Gets the last block in the blockchain
-    public Block getLastBlock() {
-        if (list.isEmpty()) {
-            return null;
-        }
-        return list.getLast();
-    }
-
-    // Adds a block to the chain if it passes validation and adjusts difficulty based on mining time
+    // Method to validate a block and add it to the blockchain
     public synchronized void addBlock(Block b, double creationTime) {
         if (validateBlock(b)) {
             list.add(b);
 
-            // Adjust difficulty based on block creation time
+            // Adjust difficulty based on the block's creation time
             if (creationTime > 60_000 && N > 0) {
-                N--;
+                N--; // Decrease difficulty
                 b.setDifficultyMessage("N was decreased by 1");
             } else if (creationTime > 10_000) {
                 b.setDifficultyMessage("N stays the same");
             } else {
-                N++;
+                N++; // Increase difficulty
                 b.setDifficultyMessage("N was increased to " + N);
             }
 
@@ -105,27 +107,74 @@ public class Blockchain {
         }
     }
 
-    // Validates a block based on its previous hash and difficulty
-    public boolean validateBlock(Block b) {
-        if (list.isEmpty() && b.getPrevHash().equals("0") && N == 0) {
-            return true; // Genesis block
-        } else if (b.getPrevHash().equals(list.getLast().getHash()) &&
-                b.getHash().startsWith("0".repeat(N))) {
-            return true;
-        }
-        return false;
+    // Method to verify the validity of a message (check signature)
+    public boolean verifyMessage(Message msg) {
+        return msg.isValid();
     }
 
-    // Validates the entire blockchain's integrity
-    public boolean validateBlockchain() {
-        for (int i = 1; i < list.size(); i++) {
-            if (!list.get(i).getPrevHash().equals(list.get(i - 1).getHash()))
-                return false;
+
+    public boolean validateBlock(Block b) {
+        Block last = getLastBlock();
+
+        if (last == null) {
+            //must be the first block, prevHash should be "0", and difficulty N should be 0
+            if (!b.getPrevHash().equals("0") || N != 0) return false;
+
+            //also verify messages (ID > 0, signature valid)
+            for (Message m : b.getMessages()) {
+                if (!verifyMessage(m) || m.getId() <= 0) return false;
+            }
+            return b.getHash().startsWith("0".repeat(N));
         }
+
+        //a block's prevhash should match the current last block's hash,
+        // and the block should start with the specified num of zeros
+        if (!b.getPrevHash().equals(last.getHash()) || !b.getHash().startsWith("0".repeat(N))) {
+            return false;
+        }
+
+        long prevMaxId = last.getMaxMessageId();
+
+        //check messages: valid signature, and ID strictly greater than previous max
+        for (Message m : b.getMessages()) {
+            if (!verifyMessage(m) || m.getId() <= prevMaxId) {
+                return false;
+            }
+        }
+
         return true;
     }
 
-    // Prints the entire blockchain
+
+    public Block getLastBlock() {
+        if (list.isEmpty()) {
+            return null;
+        }
+        return list.getLast();
+    }
+
+
+    public boolean validateBlockchain() {
+        if (list.isEmpty()) return true;
+
+        for (int i = 0; i < list.size(); i++) {
+            Block block = list.get(i);
+
+            if (i == 0) {
+                // Genesis block: must have prevHash "0" and difficulty N = 0
+                if (!block.getPrevHash().equals("0") || block.getId() != 1 || !block.getHash().startsWith("0".repeat(0))) {
+                    return false;
+                }
+            } else {
+                if (!validateBlock(block)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
     public void printBlockChain() {
         list.stream().forEach(Block::printBlock);
     }
