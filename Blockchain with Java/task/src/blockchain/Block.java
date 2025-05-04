@@ -1,6 +1,5 @@
 package blockchain;
 
-import java.util.Date;
 import java.util.List;
 
 public class Block {
@@ -12,15 +11,14 @@ public class Block {
     private int magic;
     private double generationTime;
     private final int numOfZeros;
-    private final List<Message> messages;
+    private List<Transaction> transactions;
     private String difficultyMessage="";
 
-    public Block(String prevBlockHash, int numOfZeros, int minerId, List<Message> messages){
+    public Block(String prevBlockHash, int numOfZeros, int minerId, List<Transaction> transactions){
         this.numOfZeros = numOfZeros;
         this.prevHash = prevBlockHash;
         this.minerId = minerId;
-        this.messages = messages;
-
+        this.transactions = transactions;
     }
 
     public String getHash() {
@@ -29,9 +27,11 @@ public class Block {
 
     public int getId() { return id;}
 
+    public int getMinerId() { return minerId;}
+
     public String getPrevHash() { return prevHash;}
 
-    public synchronized List<Message> getMessages(){return this.messages;}
+    public synchronized List<Transaction> getTransactions(){return this.transactions;}
 
     public long getTimeStamp() { return timeStamp;}
 
@@ -61,7 +61,7 @@ public class Block {
 
         do {
             temp = StringUtil.applySha256(this.prevHash + this.id + this.timeStamp +
-                    this.magic +  this.minerId + this.messages);
+                    this.magic +  this.minerId + this.transactions);
             magic++;
         } while (!temp.startsWith(target));
 
@@ -71,9 +71,9 @@ public class Block {
     }
 
 
-    public long getMaxMessageId() {
-        return messages.stream()
-                .mapToLong(Message::getId)
+    public long getMaxTransactionId() {
+        return transactions.stream()
+                .mapToLong(Transaction::getId)
                 .max()
                 .orElse(0);
     }
@@ -81,16 +81,15 @@ public class Block {
     //printing a block with the given format
     protected void printBlock() {
         System.out.println("Block:");
-        System.out.println("Created by miner # " + minerId);
+        System.out.println("Created by: miner" + minerId);
+        System.out.println("miner" + minerId + " gets 100 VC");
         System.out.println("Id: " + id);
         System.out.println("Timestamp: " + getTimeStamp());
         System.out.println("Magic number: " + magic);
         System.out.println("Hash of the previous block:\n" + getPrevHash());
         System.out.println("Hash of the block:\n" + getHash());
         System.out.println("Block data: ");
-        messages.stream().forEach(message -> {
-            System.out.println(message.getSender() +": " + message.getText());
-        });
+        transactions.stream().map(Transaction::getText).forEach(System.out::println);
         System.out.println("Block was generating for " + generationTime + " seconds");
         System.out.println(difficultyMessage);
         System.out.println();

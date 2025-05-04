@@ -1,34 +1,31 @@
 package blockchain;
 
 import java.security.PublicKey;
-import java.security.Signature;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 public class Blockchain {
-    //implementing Singleton pattern
     private static Blockchain INSTANCE;
-    protected static int id;
+    private int id;
     private final ArrayList<Block> list;
-    private List<Message> pendingMessages;
-    private Map<String, Client> clients;
+    private final List<Transaction> pendingTransactions;
+    private final HashMap<PublicKey, Client> registeredClients;
+    private volatile Map<Integer, Miner> minerIdToMiner; // Added
     private int N;
-    private volatile boolean acceptingMessages;
+    private volatile boolean acceptingTransactions;
 
     private Blockchain() {
-        id = 0;
+        id = 1;
         N = 0;
         list = new ArrayList<>();
-        pendingMessages = new ArrayList<>();
-        clients = new HashMap<>();
-        acceptingMessages = true;
+        pendingTransactions = new ArrayList<>();
+        registeredClients = new HashMap<>();
+        minerIdToMiner = new HashMap<>(); // Initialize
+        acceptingTransactions = true;
     }
 
-    // Singleton pattern: ensures only one instance of Blockchain
     public static Blockchain getInstance() {
         if (INSTANCE == null) {
             INSTANCE = new Blockchain();
@@ -40,111 +37,153 @@ public class Blockchain {
         return this.N;
     }
 
-    public static int getId() {
+    public int getId() {
         return id;
     }
 
     public void incrementId() {
-        id++;
+        this.id++;
     }
 
-    // Synchronized method to safely retrieve the list of pending messages
-    public synchronized List<Message> getPendingMessages() {
-        return this.pendingMessages;
+    public synchronized List<Transaction> getPendingTransactions() {
+        return this.pendingTransactions;
     }
 
-    // Synchronized method to safely add a message to the pendingMessages list
-    public synchronized void addPendingMessage(Message m) {
-        // Get the current maximum message ID in the blockchain
-        long maxId = list.isEmpty() ? 0 : getLastBlock().getMaxMessageId();
+    public synchronized void clearPendingTransactions() {
+        pendingTransactions.clear();
+    }
 
-        // Only add the message if it's valid and has a greater ID than the last one
-        if (verifyMessage(m) && m.getId() > maxId) {
-            pendingMessages.add(m);
-        } else {
-            System.out.println("Rejected invalid message: " + m);
+    public void startAcceptingTransactions() {
+        acceptingTransactions = true;
+    }
+
+    public void stopAcceptingTransactions() {
+        acceptingTransactions = false;
+    }
+
+    public boolean isAcceptingTransactions() {
+        return acceptingTransactions;
+    }
+
+    public synchronized void registerClient(Client client) {
+        PublicKey key = client.getPublicKey();
+        if (!registeredClients.containsKey(key)) {
+            registeredClients.put(key, client);
         }
     }
 
-    public Map<String, Client> getClients() {
-        return clients;
+    // Register a miner and map its ID
+    public synchronized void registerMiner(int id, Miner miner) {
+        if (!minerIdToMiner.containsKey(id)) {
+            minerIdToMiner.put(id, miner);
+            registerClient(miner); // also as regular client
+        }
     }
 
-    public void clearPendingMessages() {
-        pendingMessages.clear();
+    public synchronized void addTransaction(Transaction tx) {
+        if (!tx.isReward()) {
+            if (!tx.isValid()) {
+                System.out.println("Invalid signature — transaction rejected.");
+                return;
+            }
+
+            long maxId = list.isEmpty() ? 0 : getLastBlock().getMaxTransactionId();
+            if (tx.getId() <= maxId) {
+                System.out.println("Transaction ID not strictly greater than last seen — transaction rejected.");
+                return;
+            }
+
+            Client sender = registeredClients.get(tx.getSenderKey());
+            Client receiver = registeredClients.get(tx.getReceiverKey());
+
+            if (sender == null || receiver == null) {
+                System.out.println("Unknown sender or receiver — transaction rejected.");
+                return;
+            }
+
+            if (sender.getBalance() >= tx.getAmount()) {
+                sender.subtractBalance(tx.getAmount());
+                receiver.addBalance(tx.getAmount());
+                pendingTransactions.add(tx);
+            }
+        } else {
+            if (tx.getReceiverKey() == null) {
+                System.out.println("Reward transaction missing receiver — rejected.");
+                return;
+            }
+
+            Client receiver = registeredClients.get(tx.getReceiverKey());
+            if (receiver == null) {
+                System.out.println("Unknown reward recipient — transaction rejected.");
+                return;
+            }
+
+            receiver.addBalance(tx.getAmount());
+            pendingTransactions.add(tx);
+        }
     }
 
-    // Utility methods to control whether the blockchain is accepting messages
-    public void startAcceptingMessages() {
-        acceptingMessages = true;
-    }
-
-    public void stopAcceptingMessages() {
-        acceptingMessages = false;
-    }
-
-    public boolean isAcceptingMessages() {
-        return acceptingMessages;
-    }
-
-    // Method to validate a block and add it to the blockchain
     public synchronized void addBlock(Block b, double creationTime) {
         if (validateBlock(b)) {
             list.add(b);
 
-            // Adjust difficulty based on the block's creation time
-            if (creationTime > 60_000 && N > 0) {
-                N--; // Decrease difficulty
-                b.setDifficultyMessage("N was decreased by 1");
-            } else if (creationTime > 10_000) {
-                b.setDifficultyMessage("N stays the same");
-            } else {
-                N++; // Increase difficulty
-                b.setDifficultyMessage("N was increased to " + N);
-            }
+            // Adjust the difficulty and assign message
+            String difficultyMessage = adjustDifficulty(creationTime);
+            b.setDifficultyMessage(difficultyMessage);
 
+            // Reward the miner
+            rewardMiner(b.getMinerId());
+
+            // Update blockchain state
             incrementId();
         }
     }
 
-    // Method to verify the validity of a message (check signature)
-    public boolean verifyMessage(Message msg) {
-        return msg.isValid();
+    private synchronized void rewardMiner(int id) {
+        Miner miner = minerIdToMiner.get(id);
+        if (miner != null) {
+            miner.reward();
+        } else {
+            System.out.println("Unknown miner ID — reward skipped.");
+        }
     }
 
+    private synchronized String adjustDifficulty(double creationTime) {
+        if (creationTime > 2 && N > 0) {
+            N--;
+            return "N was decreased by 1";
+        } else if (creationTime > 0.002) {
+            return "N stays the same";
+        } else {
+            N++;
+            return "N was increased to " + N;
+        }
+    }
 
     public boolean validateBlock(Block b) {
         Block last = getLastBlock();
 
         if (last == null) {
-            //must be the first block, prevHash should be "0", and difficulty N should be 0
             if (!b.getPrevHash().equals("0") || N != 0) return false;
 
-            //also verify messages (ID > 0, signature valid)
-            for (Message m : b.getMessages()) {
-                if (!verifyMessage(m) || m.getId() <= 0) return false;
+            for (Transaction tx : b.getTransactions()) {
+                if (!tx.isValid() || tx.getId() <= 0) return false;
             }
             return b.getHash().startsWith("0".repeat(N));
         }
 
-        //a block's prevhash should match the current last block's hash,
-        // and the block should start with the specified num of zeros
         if (!b.getPrevHash().equals(last.getHash()) || !b.getHash().startsWith("0".repeat(N))) {
             return false;
         }
 
-        long prevMaxId = last.getMaxMessageId();
-
-        //check messages: valid signature, and ID strictly greater than previous max
-        for (Message m : b.getMessages()) {
-            if (!verifyMessage(m) || m.getId() <= prevMaxId) {
+        long prevMaxId = last.getMaxTransactionId();
+        for (Transaction tx : b.getTransactions()) {
+            if (!tx.isValid() || tx.getId() <= prevMaxId)
                 return false;
-            }
         }
 
         return true;
     }
-
 
     public Block getLastBlock() {
         if (list.isEmpty()) {
@@ -153,29 +192,7 @@ public class Blockchain {
         return list.getLast();
     }
 
-
-    public boolean validateBlockchain() {
-        if (list.isEmpty()) return true;
-
-        for (int i = 0; i < list.size(); i++) {
-            Block block = list.get(i);
-
-            if (i == 0) {
-                // Genesis block: must have prevHash "0" and difficulty N = 0
-                if (!block.getPrevHash().equals("0") || block.getId() != 1 || !block.getHash().startsWith("0".repeat(0))) {
-                    return false;
-                }
-            } else {
-                if (!validateBlock(block)) {
-                    return false;
-                }
-            }
-        }
-
-        return true;
-    }
-
     public void printBlockChain() {
-        list.stream().forEach(Block::printBlock);
+        list.forEach(Block::printBlock);
     }
 }
